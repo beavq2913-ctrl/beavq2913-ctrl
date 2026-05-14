@@ -44,40 +44,41 @@ def es_prostata(s):
     return bool(re.search(r"PR.{0,3}T.{0,2}TA", str(s).replace("\xa0", " ").upper()))
 
 def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante, cantidad=1):
+    """Retorna (importe, regla, es_presencia).
+    es_presencia=True cuando el importe va a la columna Presencias en lugar de Importe Firma."""
     if not patologo:
-        return 0.0, "Sin patólogo"
+        return 0.0, "Sin patólogo", False
     cod = str(cod_fact).strip()
     der = norm(derivante)
 
     if patologo == "GUSTAVO BARRIENTOS":
         if cod in CODIGOS_BARRIENTOS_FIJO:
             importe = MONTO_FIJO_BARRIENTOS * cantidad
-            return importe, f"Barrientos {cod} → $25.000 × {cantidad} = ${importe:,.0f}"
+            return importe, f"Barrientos {cod} → $25.000 × {cantidad} = ${importe:,.0f}", True
 
     if cod in CODIGOS_94_PCT and patologo != "GUSTAVO BARRIENTOS":
         if firma == "segunda":
-            return 0.0, f"Código {cod} → 2da firma ignorada"
-        return subtotal * 0.94, f"Código {cod} → 94%"
+            return 0.0, f"Código {cod} → 2da firma ignorada", False
+        return subtotal * 0.94, f"Código {cod} → 94% subtotal", True
 
     if patologo == "VALERIA ALBERTON":
-        return 0.0, "Valeria Alberton → monto fijo por ingreso"
+        return 0.0, "Valeria Alberton → monto fijo por ingreso", False
 
     if patologo in PATOLOGO_CERO:
-        return 0.0, f"{patologo} → 0%"
+        return 0.0, f"{patologo} → 0%", False
 
     if patologo in PATOLOGO_26:
-        return subtotal * 0.26, f"{patologo} → 26%"
+        return subtotal * 0.26, f"{patologo} → 26%", False
 
     if patologo in PATOLOGO_PROSTATA_ESPECIAL:
         if cod == COD_PROSTATA and es_prostata(organo_raw):
             if der == "BSI":
-                # $100.000 fijo × cantidad × 26%
                 base = PRECIO_FIJO_BSI * cantidad
-                return base * 0.26, f"{patologo} → 26% sobre ${base:,.0f} fijo (BSI × {cantidad} + Próstata+{cod})"
-            return subtotal * 0.26, f"{patologo} → 26% (Próstata+{cod})"
-        return subtotal * PCT_GENERAL, f"{patologo} → 13%"
+                return base * 0.26, f"{patologo} → 26% sobre ${base:,.0f} fijo (BSI × {cantidad} + Próstata+{cod})", False
+            return subtotal * 0.26, f"{patologo} → 26% (Próstata+{cod})", False
+        return subtotal * PCT_GENERAL, f"{patologo} → 13%", False
 
-    return subtotal * PCT_GENERAL, f"{patologo} → 13%"
+    return subtotal * PCT_GENERAL, f"{patologo} → 13%", False
 
 
 def procesar(df):
@@ -109,37 +110,44 @@ def procesar(df):
         if subtotal == 0:
             obs.append("⚠ Subtotal = 0")
 
-        imp1, regla1 = calcular_importe(pat1, "primera", subtotal, cod_fact, organo_raw, derivante, cantidad)
-        imp2, regla2 = calcular_importe(pat2, "segunda", subtotal, cod_fact, organo_raw, derivante, cantidad)
+        imp1, regla1, es_pres1 = calcular_importe(pat1, "primera", subtotal, cod_fact, organo_raw, derivante, cantidad)
+        imp2, regla2, es_pres2 = calcular_importe(pat2, "segunda", subtotal, cod_fact, organo_raw, derivante, cantidad)
         if cod_es_especial:
             imp2 = 0.0
+            es_pres2 = False
+
+        # Separar importe de firma vs presencia
+        presencia   = round(imp1, 2) if es_pres1 else 0.0
+        imp1_firma  = 0.0            if es_pres1 else round(imp1, 2)
+        imp2_firma  = round(imp2, 2) if not es_pres2 else 0.0
 
         # Valeria Alberton: un único monto fijo por ingreso
         if pat1 == "VALERIA ALBERTON" or pat2 == "VALERIA ALBERTON":
             if ingreso not in alberton_pagados:
-                imp1 = MONTO_FIJO_ALBERTON if pat1 == "VALERIA ALBERTON" else imp1
-                imp2 = MONTO_FIJO_ALBERTON if pat2 == "VALERIA ALBERTON" else imp2
+                imp1_firma = MONTO_FIJO_ALBERTON if pat1 == "VALERIA ALBERTON" else imp1_firma
+                imp2_firma = MONTO_FIJO_ALBERTON if pat2 == "VALERIA ALBERTON" else imp2_firma
                 regla1 = f"Valeria Alberton → $85.129,46 fijo (ingreso {ingreso})"
                 regla2 = regla1
                 alberton_pagados.add(ingreso)
                 obs.append(f"ℹ Monto fijo Alberton — ingreso {ingreso}")
             else:
                 if pat1 == "VALERIA ALBERTON":
-                    imp1 = 0.0
+                    imp1_firma = 0.0
                     regla1 = f"Valeria Alberton → $0 (ingreso {ingreso} ya liquidado)"
                 if pat2 == "VALERIA ALBERTON":
-                    imp2 = 0.0
+                    imp2_firma = 0.0
                     regla2 = f"Valeria Alberton → $0 (ingreso {ingreso} ya liquidado)"
 
-        total = imp1 + imp2
+        total = imp1_firma + imp2_firma + presencia
         regla = f"1ra: {regla1} | 2da: {regla2}" if pat2 and not cod_es_especial else regla1
 
         # Preservar todas las columnas originales + agregar liquidación al final
         fila = {col: row.get(col, "") for col in df.columns}
         fila["Patólogo Primera Firma"] = pat1
-        fila["Importe Primera Firma"]  = round(imp1, 2)
+        fila["Importe Primera Firma"]  = imp1_firma
+        fila["Presencias"]             = presencia
         fila["Patólogo Segunda Firma"] = pat2
-        fila["Importe Segunda Firma"]  = round(imp2, 2)
+        fila["Importe Segunda Firma"]  = imp2_firma
         fila["Total Liquidado"]        = round(total, 2)
         fila["Regla Aplicada"]         = regla
         fila["Observaciones"]          = " | ".join(obs) if obs else ""
@@ -178,12 +186,12 @@ COLS_ORIGINALES = [
     "Fecha confirmacion","Precio Unit.","Subtotal",
 ]
 COLS_LIQ = [
-    "Patólogo Primera Firma","Importe Primera Firma",
+    "Patólogo Primera Firma","Importe Primera Firma","Presencias",
     "Patólogo Segunda Firma","Importe Segunda Firma",
     "Total Liquidado","Regla Aplicada","Observaciones",
 ]
 COLS_DET = COLS_ORIGINALES + COLS_LIQ
-MONEY = {"Importe Primera Firma","Importe Segunda Firma","Total Liquidado","Subtotal","Precio Unit."}
+MONEY = {"Importe Primera Firma","Presencias","Importe Segunda Firma","Total Liquidado","Subtotal","Precio Unit."}
 
 
 def escribir_hoja_detalle(ws, filas_df, titulo_hoja=None):
@@ -347,7 +355,7 @@ def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
     if not filas_1ra.empty:
         df_1ra = filas_1ra.copy()
         df_1ra["Importe Segunda Firma"] = 0.0
-        df_1ra["Total Liquidado"]       = df_1ra["Importe Primera Firma"]
+        df_1ra["Total Liquidado"]       = df_1ra["Importe Primera Firma"] + df_1ra["Presencias"]
         df_1ra["Regla Aplicada"]        = df_1ra["Regla Aplicada"].apply(lambda r: extraer_regla(r, "1ra"))
         ws1 = wb.create_sheet("Primera Firma")
         escribir_hoja_detalle(ws1, df_1ra)
@@ -357,6 +365,7 @@ def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
     if not filas_2da.empty:
         df_2da = filas_2da.copy()
         df_2da["Importe Primera Firma"] = 0.0
+        df_2da["Presencias"]            = 0.0
         df_2da["Total Liquidado"]       = df_2da["Importe Segunda Firma"]
         df_2da["Regla Aplicada"]        = df_2da["Regla Aplicada"].apply(lambda r: extraer_regla(r, "2da"))
         ws2 = wb.create_sheet("Segunda Firma")
