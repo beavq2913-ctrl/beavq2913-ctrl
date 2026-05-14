@@ -43,7 +43,7 @@ def norm(val):
 def es_prostata(s):
     return bool(re.search(r"PR.{0,3}T.{0,2}TA", str(s).replace("\xa0", " ").upper()))
 
-def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante):
+def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante, cantidad=1):
     if not patologo:
         return 0.0, "Sin patólogo"
     cod = str(cod_fact).strip()
@@ -51,7 +51,8 @@ def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante)
 
     if patologo == "GUSTAVO BARRIENTOS":
         if cod in CODIGOS_BARRIENTOS_FIJO:
-            return MONTO_FIJO_BARRIENTOS, f"Barrientos {cod} → $25.000 fijo"
+            importe = MONTO_FIJO_BARRIENTOS * cantidad
+            return importe, f"Barrientos {cod} → $25.000 × {cantidad} = ${importe:,.0f}"
 
     if cod in CODIGOS_94_PCT and patologo != "GUSTAVO BARRIENTOS":
         if firma == "segunda":
@@ -70,9 +71,9 @@ def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante)
     if patologo in PATOLOGO_PROSTATA_ESPECIAL:
         if cod == COD_PROSTATA and es_prostata(organo_raw):
             if der == "BSI":
-                # Precio fijo $100.000 × 26% aplica igual para 1ra y 2da firma
-                return PRECIO_FIJO_BSI * 0.26, f"{patologo} → 26% sobre $100.000 fijo (BSI+Próstata+{cod})"
-            # Sin BSI: 26% sobre subtotal, aplica igual para 1ra y 2da firma
+                # $100.000 fijo × cantidad × 26%
+                base = PRECIO_FIJO_BSI * cantidad
+                return base * 0.26, f"{patologo} → 26% sobre ${base:,.0f} fijo (BSI × {cantidad} + Próstata+{cod})"
             return subtotal * 0.26, f"{patologo} → 26% (Próstata+{cod})"
         return subtotal * PCT_GENERAL, f"{patologo} → 13%"
 
@@ -85,6 +86,7 @@ def procesar(df):
 
     for _, row in df.iterrows():
         subtotal   = pd.to_numeric(row.get("Subtotal", 0), errors="coerce") or 0.0
+        cantidad   = max(int(pd.to_numeric(row.get("Cantidad", 1), errors="coerce") or 1), 1)
         cod_fact   = str(row.get("Cod.Fact.", "")).strip()
         organo_raw = str(row.get("Organo", ""))
         derivante  = row.get("Derivante", "")
@@ -107,8 +109,8 @@ def procesar(df):
         if subtotal == 0:
             obs.append("⚠ Subtotal = 0")
 
-        imp1, regla1 = calcular_importe(pat1, "primera", subtotal, cod_fact, organo_raw, derivante)
-        imp2, regla2 = calcular_importe(pat2, "segunda", subtotal, cod_fact, organo_raw, derivante)
+        imp1, regla1 = calcular_importe(pat1, "primera", subtotal, cod_fact, organo_raw, derivante, cantidad)
+        imp2, regla2 = calcular_importe(pat2, "segunda", subtotal, cod_fact, organo_raw, derivante, cantidad)
         if cod_es_especial:
             imp2 = 0.0
 
