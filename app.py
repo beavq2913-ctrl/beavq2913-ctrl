@@ -487,9 +487,17 @@ if uploaded:
             df = pd.read_excel(uploaded, sheet_name=hoja_datos, header=0, dtype=str)
             df.columns = [str(c).replace("\xa0", " ").strip() for c in df.columns]
             df["Subtotal"] = pd.to_numeric(df["Subtotal"], errors="coerce").fillna(0)
+            # Eliminar filas con Cod.Fact. = 0, vacío o nulo
+            filas_antes = len(df)
+            df = df[~df["Cod.Fact."].fillna("").str.strip().isin(["0", "0.0", ""])]
+            df = df.reset_index(drop=True)
+            filas_eliminadas = filas_antes - len(df)
 
         nombre_base = uploaded.name.replace(".xlsx","").replace(".xls","")
-        st.success(f"✅ Archivo cargado — hoja **{hoja_datos}** — {len(df):,} estudios encontrados")
+        msg = f"✅ Archivo cargado — hoja **{hoja_datos}** — {len(df):,} estudios"
+        if filas_eliminadas > 0:
+            msg += f" ({filas_eliminadas} filas con Cod.Fact.=0 eliminadas)"
+        st.success(msg)
 
     except Exception as e:
         st.error(f"❌ Error al leer el archivo: {e}")
