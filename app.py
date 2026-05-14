@@ -308,24 +308,29 @@ def construir_excel_general(df_result):
 
 
 def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
-    """Excel individual para un patólogo con sus estudios de 1ra y 2da firma."""
+    """Excel individual para un patólogo — solo muestra sus propios importes, el resto en 0."""
     wb = Workbook()
     wb.remove(wb.active)
 
     total_general = 0.0
 
-    # Hoja 1ra firma (si tiene)
+    # Hoja 1ra firma: mostrar su importe, poner 0 en 2da firma y recalcular total
     if not filas_1ra.empty:
+        df_1ra = filas_1ra.copy()
+        df_1ra["Importe Segunda Firma"] = 0.0
+        df_1ra["Total Liquidado"]       = df_1ra["Importe Primera Firma"]
         ws1 = wb.create_sheet("Primera Firma")
-        escribir_hoja_detalle(ws1, filas_1ra)
-        total_general += filas_1ra["Importe Primera Firma"].sum()
+        escribir_hoja_detalle(ws1, df_1ra)
+        total_general += df_1ra["Importe Primera Firma"].sum()
 
-    # Hoja 2da firma (si tiene)
+    # Hoja 2da firma: mostrar su importe, poner 0 en 1ra firma y recalcular total
     if not filas_2da.empty:
+        df_2da = filas_2da.copy()
+        df_2da["Importe Primera Firma"] = 0.0
+        df_2da["Total Liquidado"]       = df_2da["Importe Segunda Firma"]
         ws2 = wb.create_sheet("Segunda Firma")
-        # Para 2da firma mostrar columnas relevantes
-        escribir_hoja_detalle(ws2, filas_2da)
-        total_general += filas_2da["Importe Segunda Firma"].sum()
+        escribir_hoja_detalle(ws2, df_2da)
+        total_general += df_2da["Importe Segunda Firma"].sum()
 
     # Hoja resumen del patólogo
     wsr = wb.create_sheet("Resumen")
