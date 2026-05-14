@@ -1,6 +1,7 @@
 import re
 import io
 import zipfile
+import unicodedata
 import pandas as pd
 import streamlit as st
 from openpyxl import Workbook
@@ -20,8 +21,10 @@ CODIGOS_94_PCT = {"150104","150115","150888","99999"}
 CODIGOS_BARRIENTOS_FIJO = {"50104","150104","150115","150888","99999"}
 MONTO_FIJO_BARRIENTOS = 25000.0
 PATOLOGO_PROSTATA_ESPECIAL = {
-    "DAIRA NAIMAN","GABRIELA INÉS CREVENA","GABRIELA INES CREVENA",
-    "GABRIELA INɓ CREVENA","NILDA GONZALEZ ROIBON",
+    "DAIRA NAIMAN",
+    "GABRIELA INES CREVENA",   # cubre variante INÉS
+    "GABRIELA INƁ CREVENA",    # cubre variante con carácter IPA ɓ (ord=595)
+    "NILDA GONZALEZ ROIBON",
 }
 COD_PROSTATA = "150103"
 PRECIO_FIJO_BSI = 100000.0
@@ -29,7 +32,13 @@ PRECIO_FIJO_BSI = 100000.0
 def norm(val):
     if pd.isna(val) or str(val).strip() == "":
         return ""
-    return str(val).replace("\xa0", " ").strip().upper()
+    s = str(val).replace("\xa0", " ").strip().upper()
+    s = " ".join(s.split())
+    # Normalizar caracteres unicode (ɓ→B, É→E, etc.) para matching robusto
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s
+
 
 def es_prostata(s):
     return bool(re.search(r"PR.{0,3}T.{0,2}TA", str(s).replace("\xa0", " ").upper()))
@@ -61,8 +70,10 @@ def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante)
     if patologo in PATOLOGO_PROSTATA_ESPECIAL:
         if cod == COD_PROSTATA and es_prostata(organo_raw):
             if der == "BSI":
-                return PRECIO_FIJO_BSI * 0.26, f"{patologo} → 26% BSI $100k"
-            return subtotal * 0.26, f"{patologo} → 26% Próstata"
+                # Precio fijo $100.000 × 26% aplica igual para 1ra y 2da firma
+                return PRECIO_FIJO_BSI * 0.26, f"{patologo} → 26% sobre $100.000 fijo (BSI+Próstata+{cod})"
+            # Sin BSI: 26% sobre subtotal, aplica igual para 1ra y 2da firma
+            return subtotal * 0.26, f"{patologo} → 26% (Próstata+{cod})"
         return subtotal * PCT_GENERAL, f"{patologo} → 13%"
 
     return subtotal * PCT_GENERAL, f"{patologo} → 13%"
@@ -121,22 +132,16 @@ def procesar(df):
         total = imp1 + imp2
         regla = f"1ra: {regla1} | 2da: {regla2}" if pat2 and not cod_es_especial else regla1
 
-        resultados.append({
-            "Paciente":               str(row.get("Paciente", "")).strip(),
-            "Fecha":                  row.get("Fecha", ""),
-            "Ingreso":                ingreso,
-            "Cod.Fact.":              cod_fact,
-            "Organo":                 organo_raw.replace("\xa0", " ").strip(),
-            "Derivante":              str(derivante).replace("\xa0", " ").strip(),
-            "Patólogo Primera Firma": pat1,
-            "Importe Primera Firma":  round(imp1, 2),
-            "Patólogo Segunda Firma": pat2,
-            "Importe Segunda Firma":  round(imp2, 2),
-            "Total Liquidado":        round(total, 2),
-            "Subtotal Original":      round(subtotal, 2),
-            "Regla Aplicada":         regla,
-            "Observaciones":          " | ".join(obs) if obs else "",
-        })
+        # Preservar todas las columnas originales + agregar liquidación al final
+        fila = {col: row.get(col, "") for col in df.columns}
+        fila["Patólogo Primera Firma"] = pat1
+        fila["Importe Primera Firma"]  = round(imp1, 2)
+        fila["Patólogo Segunda Firma"] = pat2
+        fila["Importe Segunda Firma"]  = round(imp2, 2)
+        fila["Total Liquidado"]        = round(total, 2)
+        fila["Regla Aplicada"]         = regla
+        fila["Observaciones"]          = " | ".join(obs) if obs else ""
+        resultados.append(fila)
 
     return pd.DataFrame(resultados)
 
@@ -163,23 +168,34 @@ def auto_w(ws):
         mx = max((len(str(c.value)) for c in col if c.value), default=8)
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(mx + 4, 48)
 
-COLS_DET = [
-    "Paciente","Fecha","Ingreso","Cod.Fact.","Organo","Derivante",
+# Columnas originales del Excel + columnas de liquidación al final
+COLS_ORIGINALES = [
+    "Tipo","Descripcion","Liquidado en","Cod.Fact.","Cod. OS","Cantidad",
+    "Ingreso","Fecha","Paciente","Afiliado","DNI","Fec. Nacimiento",
+    "Obra social","Condicion:","Derivante","Organo","Patologo","Matricula",
+    "Primera Validacion","Segunda Validacion","Medico solicitante","Matricula.1",
+    "Nro.Pedido","Fecha confirmacion","CUIT:","Sexo","Precio Unit.",
+    "Subtotal","IVA 10,5%","IVA 21%","TOTAL",
+]
+COLS_LIQ = [
     "Patólogo Primera Firma","Importe Primera Firma",
     "Patólogo Segunda Firma","Importe Segunda Firma",
-    "Total Liquidado","Subtotal Original","Regla Aplicada","Observaciones",
+    "Total Liquidado","Regla Aplicada","Observaciones",
 ]
-MONEY = {"Importe Primera Firma","Importe Segunda Firma","Total Liquidado","Subtotal Original"}
+COLS_DET = COLS_ORIGINALES + COLS_LIQ
+MONEY = {"Importe Primera Firma","Importe Segunda Firma","Total Liquidado","Subtotal","TOTAL","Precio Unit."}
 
 
 def escribir_hoja_detalle(ws, filas_df, titulo_hoja=None):
     """Escribe filas de detalle en una hoja con formato."""
-    ws.append(COLS_DET)
+    # Usar solo columnas que existen en el df (por compatibilidad entre archivos)
+    cols = [c for c in COLS_DET if c in filas_df.columns]
+    ws.append(cols)
     for c in ws[1]: hdr(c)
     ws.row_dimensions[1].height = 30
 
     for i, row in filas_df.iterrows():
-        ws.append([row[c] for c in COLS_DET])
+        ws.append([row[c] for c in cols])
         er  = ws.max_row
         obs = bool(row["Observaciones"])
         for j, cell in enumerate(ws[er]):
@@ -188,25 +204,28 @@ def escribir_hoja_detalle(ws, filas_df, titulo_hoja=None):
             cell.alignment = Alignment(vertical="center")
             if obs:           cell.fill = PatternFill("solid", start_color=ROJO_CLARO)
             elif er % 2 == 0: cell.fill = PatternFill("solid", start_color=GRIS)
-            if COLS_DET[j] in MONEY: cell.number_format = '$#,##0.00'
+            if cols[j] in MONEY: cell.number_format = '$#,##0.00'
 
     # Fila de total al pie
+    # Fila de total al pie
     ws.append([])
-    fila_tot = ws.max_row + 1
-    total_1ra = filas_df["Importe Primera Firma"].sum()
-    total_2da = filas_df["Importe Segunda Firma"].sum()
-    total_gen = filas_df["Total Liquidado"].sum()
-    ws.append(["TOTAL", "", "", "", "", "",
-               "", round(total_1ra, 2),
-               "", round(total_2da, 2),
-               round(total_gen, 2), "", "", ""])
+    total_1ra = filas_df["Importe Primera Firma"].sum() if "Importe Primera Firma" in filas_df.columns else 0
+    total_2da = filas_df["Importe Segunda Firma"].sum() if "Importe Segunda Firma" in filas_df.columns else 0
+    total_gen = filas_df["Total Liquidado"].sum() if "Total Liquidado" in filas_df.columns else 0
+    fila_tot = [""] * len(cols)
+    for idx, c in enumerate(cols):
+        if c == "Paciente": fila_tot[idx] = "TOTAL"
+        elif c == "Importe Primera Firma":  fila_tot[idx] = round(total_1ra, 2)
+        elif c == "Importe Segunda Firma":  fila_tot[idx] = round(total_2da, 2)
+        elif c == "Total Liquidado":        fila_tot[idx] = round(total_gen, 2)
+    ws.append(fila_tot)
     er = ws.max_row
     for j, cell in enumerate(ws[er]):
         cell.border = brd()
         cell.font   = Font(name="Arial", size=10, bold=True, color="FFFFFF")
         cell.fill   = PatternFill("solid", start_color=AZUL_OSCURO)
         cell.alignment = Alignment(vertical="center", horizontal="center")
-        if COLS_DET[j] in MONEY: cell.number_format = '$#,##0.00'
+        if cols[j] in MONEY: cell.number_format = '$#,##0.00'
 
     ws.freeze_panes = "A2"
     auto_w(ws)
@@ -295,7 +314,7 @@ def construir_excel_general(df_result):
     titulo("📊 RESUMEN GENERAL DE LIQUIDACIÓN")
     ws4.append([])
     kv("Total estudios procesados",    len(df_result),                       fmt="0")
-    kv("Total subtotal facturado",      df_result["Subtotal Original"].sum())
+    kv("Total subtotal facturado",      df_result["Subtotal"].sum())
     kv("Total liquidado primera firma", df_result["Importe Primera Firma"].sum())
     kv("Total liquidado segunda firma", df_result["Importe Segunda Firma"].sum())
     kv("TOTAL GENERAL LIQUIDADO",       df_result["Total Liquidado"].sum(),  bold=True)
@@ -480,7 +499,7 @@ if uploaded:
         st.subheader("📊 Resumen")
 
         total_liq = df_result["Total Liquidado"].sum()
-        total_sub = df_result["Subtotal Original"].sum()
+        total_sub = df_result["Subtotal"].sum()
         total_1ra = df_result["Importe Primera Firma"].sum()
         total_2da = df_result["Importe Segunda Firma"].sum()
 
