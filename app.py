@@ -172,10 +172,8 @@ def auto_w(ws):
 COLS_ORIGINALES = [
     "Tipo","Descripcion","Liquidado en","Cod.Fact.","Cod. OS","Cantidad",
     "Ingreso","Fecha","Paciente","Afiliado","DNI","Fec. Nacimiento",
-    "Obra social","Condicion:","Derivante","Organo","Patologo","Matricula",
-    "Primera Validacion","Segunda Validacion","Medico solicitante","Matricula.1",
-    "Nro.Pedido","Fecha confirmacion","CUIT:","Sexo","Precio Unit.",
-    "Subtotal","IVA 10,5%","IVA 21%","TOTAL",
+    "Obra social","Condicion:","Derivante","Organo","Matricula",
+    "Fecha confirmacion","Precio Unit.","Subtotal",
 ]
 COLS_LIQ = [
     "Patólogo Primera Firma","Importe Primera Firma",
@@ -183,7 +181,7 @@ COLS_LIQ = [
     "Total Liquidado","Regla Aplicada","Observaciones",
 ]
 COLS_DET = COLS_ORIGINALES + COLS_LIQ
-MONEY = {"Importe Primera Firma","Importe Segunda Firma","Total Liquidado","Subtotal","TOTAL","Precio Unit."}
+MONEY = {"Importe Primera Firma","Importe Segunda Firma","Total Liquidado","Subtotal","Precio Unit."}
 
 
 def escribir_hoja_detalle(ws, filas_df, titulo_hoja=None):
@@ -333,20 +331,32 @@ def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
 
     total_general = 0.0
 
-    # Hoja 1ra firma: mostrar su importe, poner 0 en 2da firma y recalcular total
+    def extraer_regla(regla_completa, firma):
+        """Extrae solo la parte de la regla que corresponde a la firma indicada."""
+        if "|" not in str(regla_completa):
+            return regla_completa  # regla simple, no tiene separador
+        partes = str(regla_completa).split(" | ")
+        for parte in partes:
+            if parte.startswith(f"{firma}:"):
+                return parte[len(f"{firma}: "):]  # quitar el prefijo "1ra: " o "2da: "
+        return regla_completa
+
+    # Hoja 1ra firma: solo su importe, regla solo de su firma
     if not filas_1ra.empty:
         df_1ra = filas_1ra.copy()
         df_1ra["Importe Segunda Firma"] = 0.0
         df_1ra["Total Liquidado"]       = df_1ra["Importe Primera Firma"]
+        df_1ra["Regla Aplicada"]        = df_1ra["Regla Aplicada"].apply(lambda r: extraer_regla(r, "1ra"))
         ws1 = wb.create_sheet("Primera Firma")
         escribir_hoja_detalle(ws1, df_1ra)
         total_general += df_1ra["Importe Primera Firma"].sum()
 
-    # Hoja 2da firma: mostrar su importe, poner 0 en 1ra firma y recalcular total
+    # Hoja 2da firma: solo su importe, regla solo de su firma
     if not filas_2da.empty:
         df_2da = filas_2da.copy()
         df_2da["Importe Primera Firma"] = 0.0
         df_2da["Total Liquidado"]       = df_2da["Importe Segunda Firma"]
+        df_2da["Regla Aplicada"]        = df_2da["Regla Aplicada"].apply(lambda r: extraer_regla(r, "2da"))
         ws2 = wb.create_sheet("Segunda Firma")
         escribir_hoja_detalle(ws2, df_2da)
         total_general += df_2da["Importe Segunda Firma"].sum()
