@@ -251,34 +251,35 @@ def construir_excel_general(df_result):
     # RESUMEN POR PATÓLOGO
     ws2 = wb.create_sheet("Resumen por Patólogo")
     g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
-        e1=("Importe Primera Firma","count"), t1=("Importe Primera Firma","sum")
+        e1=("Importe Primera Firma","count"),
+        t1=("Importe Primera Firma","sum"),
+        tp=("Presencias","sum"),
     ).reset_index().rename(columns={"Patólogo Primera Firma":"P"})
     g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma").agg(
         e2=("Importe Segunda Firma","count"), t2=("Importe Segunda Firma","sum")
     ).reset_index().rename(columns={"Patólogo Segunda Firma":"P"})
     res = pd.merge(g1, g2, on="P", how="outer").fillna(0)
-    res["tot"] = res["t1"] + res["t2"]
+    res["tot"] = res["t1"] + res["tp"] + res["t2"]
     res = res.sort_values("tot", ascending=False)
 
-    ws2.append(["Patólogo","Estudios 1ra Firma","Total 1ra Firma ($)","Estudios 2da Firma","Total 2da Firma ($)","Total General ($)"])
+    ws2.append(["Patólogo","Estudios 1ra Firma","Total 1ra Firma ($)","Presencias ($)","Estudios 2da Firma","Total 2da Firma ($)","Total General ($)"])
     for c in ws2[1]: hdr(c)
     ws2.row_dimensions[1].height = 30
     for _, r in res.iterrows():
-        ws2.append([r["P"], int(r["e1"]), round(r["t1"],2), int(r["e2"]), round(r["t2"],2), round(r["tot"],2)])
+        ws2.append([r["P"], int(r["e1"]), round(r["t1"],2), round(r["tp"],2), int(r["e2"]), round(r["t2"],2), round(r["tot"],2)])
         er = ws2.max_row
         for j, cell in enumerate(ws2[er]):
             cell.border = brd(); cell.font = Font(name="Arial", size=9)
             cell.alignment = Alignment(vertical="center")
             if er % 2 == 0: cell.fill = PatternFill("solid", start_color=AZUL_CLARO)
-            if j in (2,4,5): cell.number_format = '$#,##0.00'
+            if j in (2,3,5,6): cell.number_format = '$#,##0.00'
     ft = ws2.max_row + 1
     ws2.append(["TOTAL GENERAL",
-                f"=SUM(B2:B{ft-1})", f"=SUM(C2:C{ft-1})",
-                f"=SUM(D2:D{ft-1})", f"=SUM(E2:E{ft-1})",
-                f"=SUM(F2:F{ft-1})"])
+                f"=SUM(B2:B{ft-1})", f"=SUM(C2:C{ft-1})", f"=SUM(D2:D{ft-1})",
+                f"=SUM(E2:E{ft-1})", f"=SUM(F2:F{ft-1})", f"=SUM(G2:G{ft-1})"])
     for j, cell in enumerate(ws2[ft]):
         hdr(cell); cell.border = brd()
-        if j in (2,4,5): cell.number_format = '$#,##0.00'
+        if j in (2,3,5,6): cell.number_format = '$#,##0.00'
     ws2.freeze_panes = "A2"; auto_w(ws2)
 
     # INCONSISTENCIAS
@@ -324,9 +325,9 @@ def construir_excel_general(df_result):
     kv("Total estudios procesados",    len(df_result),                       fmt="0")
     kv("Total subtotal facturado",      df_result["Subtotal"].sum())
     kv("Total liquidado primera firma", df_result["Importe Primera Firma"].sum())
+    kv("Total presencias",               df_result["Presencias"].sum())
     kv("Total liquidado segunda firma", df_result["Importe Segunda Firma"].sum())
     kv("TOTAL GENERAL LIQUIDADO",       df_result["Total Liquidado"].sum(),  bold=True)
-    kv("Inconsistencias detectadas",    len(df_inc),                         fmt="0")
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -562,21 +563,24 @@ if uploaded:
         st.divider()
         st.subheader("👩‍⚕️ Totales por patólogo")
 
-        g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma")["Importe Primera Firma"].sum()
+        g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
+            pf=("Importe Primera Firma","sum"), pres=("Presencias","sum")
+        )
         g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma")["Importe Segunda Firma"].sum()
-        resumen = pd.concat([g1, g2], axis=1).fillna(0)
-        resumen.columns = ["1ra Firma ($)", "2da Firma ($)"]
-        resumen["Total ($)"] = resumen["1ra Firma ($)"] + resumen["2da Firma ($)"]
+        resumen = g1.join(g2, how="outer").fillna(0)
+        resumen.columns = ["1ra Firma ($)", "Presencias ($)", "2da Firma ($)"]
+        resumen["Total ($)"] = resumen["1ra Firma ($)"] + resumen["Presencias ($)"] + resumen["2da Firma ($)"]
         resumen = resumen.sort_values("Total ($)", ascending=False).reset_index()
-        resumen.columns = ["Patólogo","1ra Firma ($)","2da Firma ($)","Total ($)"]
+        resumen.columns = ["Patólogo","1ra Firma ($)","Presencias ($)","2da Firma ($)","Total ($)"]
         fila_total = pd.DataFrame([{
-            "Patólogo": "TOTAL GENERAL",
-            "1ra Firma ($)": resumen["1ra Firma ($)"].sum(),
-            "2da Firma ($)": resumen["2da Firma ($)"].sum(),
-            "Total ($)":     resumen["Total ($)"].sum(),
+            "Patólogo":       "TOTAL GENERAL",
+            "1ra Firma ($)":  resumen["1ra Firma ($)"].sum(),
+            "Presencias ($)": resumen["Presencias ($)"].sum(),
+            "2da Firma ($)":  resumen["2da Firma ($)"].sum(),
+            "Total ($)":      resumen["Total ($)"].sum(),
         }])
         resumen_display = pd.concat([resumen, fila_total], ignore_index=True)
-        for col in ["1ra Firma ($)","2da Firma ($)","Total ($)"]:
+        for col in ["1ra Firma ($)","Presencias ($)","2da Firma ($)","Total ($)"]:
             resumen_display[col] = resumen_display[col].apply(lambda x: f"${x:,.2f}")
         st.dataframe(resumen_display, use_container_width=True, hide_index=True)
 
