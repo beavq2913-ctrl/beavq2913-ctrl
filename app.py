@@ -15,7 +15,7 @@ PATOLOGO_CERO = {
     "VANESA MIKOLAITIS","NURIA GALLEGO TREJO","SILVIA VIVIANA HERRERA",
     "VALERIA ALBERTON","ELAINE DE FREITAS","EXTERNO PATOLOGO",
 }
-MONTO_FIJO_ALBERTON = 85129.46
+MONTO_FIJO_ALBERTON_DEFAULT = 85129.46  # valor base — se sobreescribe desde la UI
 PATOLOGO_26 = {"CLAUDIO LEWIN"}
 CODIGOS_94_PCT = {"150104","150115","150888","99999"}
 CODIGOS_BARRIENTOS_FIJO = {"50104","150104","150115","150888","99999"}
@@ -81,7 +81,7 @@ def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante,
     return subtotal * PCT_GENERAL, f"{patologo} → 13%", False
 
 
-def procesar(df):
+def procesar(df, monto_alberton=MONTO_FIJO_ALBERTON_DEFAULT):
     alberton_pagados = set()
     resultados = []
 
@@ -124,9 +124,9 @@ def procesar(df):
         # Valeria Alberton: un único monto fijo por ingreso
         if pat1 == "VALERIA ALBERTON" or pat2 == "VALERIA ALBERTON":
             if ingreso not in alberton_pagados:
-                imp1_firma = MONTO_FIJO_ALBERTON if pat1 == "VALERIA ALBERTON" else imp1_firma
-                imp2_firma = MONTO_FIJO_ALBERTON if pat2 == "VALERIA ALBERTON" else imp2_firma
-                regla1 = f"Valeria Alberton → $85.129,46 fijo (ingreso {ingreso})"
+                imp1_firma = monto_alberton if pat1 == "VALERIA ALBERTON" else imp1_firma
+                imp2_firma = monto_alberton if pat2 == "VALERIA ALBERTON" else imp2_firma
+                regla1 = f"Valeria Alberton → ${monto_alberton:,.2f} fijo (ingreso {ingreso})"
                 regla2 = regla1
                 alberton_pagados.add(ingreso)
                 obs.append(f"ℹ Monto fijo Alberton — ingreso {ingreso}")
@@ -345,10 +345,13 @@ def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
     COLS_SIN_OBS = [c for c in COLS_DET if c not in ("Regla Aplicada", "Observaciones")]
 
     # Hoja 1ra firma: solo su importe, sin regla ni observaciones
+    # Para Valeria Alberton: eliminar filas duplicadas del mismo ingreso (importe = 0)
     if not filas_1ra.empty:
         df_1ra = filas_1ra.copy()
         df_1ra["Importe Segunda Firma"] = 0.0
         df_1ra["Total Liquidado"]       = df_1ra["Importe Primera Firma"] + df_1ra["Presencias"]
+        if nombre_patologo == "VALERIA ALBERTON":
+            df_1ra = df_1ra[(df_1ra["Importe Primera Firma"] > 0) | (df_1ra["Presencias"] > 0)]
         ws1 = wb.create_sheet("Primera Firma")
         escribir_hoja_detalle(ws1, df_1ra, cols_override=COLS_SIN_OBS)
         total_general += df_1ra["Importe Primera Firma"].sum()
@@ -417,7 +420,7 @@ def construir_zip_patologo(df_result, nombre_base):
             total = filas_1ra["Importe Primera Firma"].sum() + filas_2da["Importe Segunda Firma"].sum()
 
             excel_pat = construir_excel_patologo(pat, filas_1ra, filas_2da)
-            nombre_archivo = f"{pat.replace(' ', '_').replace('/', '-')}_{nombre_base}.xlsx"
+            nombre_archivo = f"Optimi_{pat.replace(' ', '_').replace('/', '-')}_{nombre_base}.xlsx"
             zf.writestr(nombre_archivo, excel_pat.read())
 
     zip_buf.seek(0)
@@ -505,10 +508,24 @@ if uploaded:
         st.error(f"❌ Error al leer el archivo: {e}")
         st.stop()
 
+    st.divider()
+    st.subheader("⚙️ Parámetros del mes")
+    col_alb, col_vacio = st.columns([1, 2])
+    with col_alb:
+        monto_alberton = st.number_input(
+            "Monto Valeria Alberton ($)",
+            min_value=0.0,
+            value=MONTO_FIJO_ALBERTON_DEFAULT,
+            step=100.0,
+            format="%.2f",
+            help=f"Monto fijo por ingreso para este mes. Se actualiza según el aumento OSDE acumulado. Valor base: ${MONTO_FIJO_ALBERTON_DEFAULT:,.2f}"
+        )
+    st.divider()
+
     if st.button("⚡ Calcular liquidación"):
         prog = st.progress(0, text="Procesando estudios...")
         with st.spinner(""):
-            df_result = procesar(df)
+            df_result = procesar(df, monto_alberton=monto_alberton)
             prog.progress(50, text="Generando Excel general...")
             excel_buf, n_inc = construir_excel_general(df_result)
             prog.progress(80, text="Generando archivos por patólogo...")
