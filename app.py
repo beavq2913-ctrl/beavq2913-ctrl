@@ -447,7 +447,33 @@ def construir_excel_general(df_result):
 
     # ── HOJA 3: Resumen General (todos) ──────────────────────────────────────
     ws2c = wb.create_sheet("Resumen General")
-    escribir_resumen_iva(ws2c, res_all)
+
+    hdrs_gen = ["Patólogo",
+                "Estudios 1ra Firma","Total 1ra Firma ($)","Presencias ($)",
+                "Estudios 2da Firma","Total 2da Firma ($)",
+                "Total Liquidado ($)","IVA 10,5% ($)","IVA 21% ($)","Total a facturar ($)"]
+    ws2c.append(hdrs_gen)
+    for c in ws2c[1]: hdr(c)
+    ws2c.row_dimensions[1].height=30
+    MG = {2,3,5,6,7,8,9}
+    for _,r in res_all.iterrows():
+        ws2c.append([r["P"], int(r["e1"]), round(r["t1"],2), round(r["tp"],2),
+                     int(r["e2"]), round(r["t2"],2), round(r["tot"],2),
+                     round(r["iv10"],2), round(r["iv21"],2), round(r["taf"],2)])
+        er = ws2c.max_row
+        for j,cell in enumerate(ws2c[er]):
+            cell.border=brd(); cell.font=Font(name="Arial",size=9); cell.alignment=Alignment(vertical="center")
+            if er%2==0: cell.fill=PatternFill("solid",start_color=AZUL_CLARO)
+            if j in MG: cell.number_format="$#,##0.00"
+    ft = ws2c.max_row+1
+    ws2c.append(["TOTAL GENERAL",
+                 f"=SUM(B2:B{ft-1})",f"=SUM(C2:C{ft-1})",f"=SUM(D2:D{ft-1})",
+                 f"=SUM(E2:E{ft-1})",f"=SUM(F2:F{ft-1})",f"=SUM(G2:G{ft-1})",
+                 f"=SUM(H2:H{ft-1})",f"=SUM(I2:I{ft-1})",f"=SUM(J2:J{ft-1})"])
+    for j,cell in enumerate(ws2c[ft]):
+        hdr(cell); cell.border=brd()
+        if j in MG: cell.number_format="$#,##0.00"
+    ws2c.freeze_panes="A2"; auto_w(ws2c)
 
     # INCONSISTENCIAS
     ws3    = wb.create_sheet("Inconsistencias")
