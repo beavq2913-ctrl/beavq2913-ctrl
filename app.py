@@ -15,6 +15,16 @@ PATOLOGO_CERO = {
     "VANESA MIKOLAITIS","NURIA GALLEGO TREJO","SILVIA VIVIANA HERRERA",
     "VALERIA ALBERTON","ELAINE DE FREITAS","EXTERNO PATOLOGO",
 }
+
+# Patólogos inscriptos en IVA — para el resto el IVA es siempre 0
+PATOLOGO_CON_IVA = {
+    "FEDERICO BASILI",
+    "ALEJANDRA AVAGNINA",
+    "GISELLE ROMERO CAIMI",
+    "CLAUDIO LEWIN",
+    "VALERIA ALBERTON",
+    "ANTONIO SACCO",
+}
 MONTO_FIJO_ALBERTON_DEFAULT = 85129.46  # valor base — se sobreescribe desde la UI
 PATOLOGO_26 = {"CLAUDIO LEWIN"}
 CODIGOS_94_PCT = {"150104","150115","150888","99999"}
@@ -81,9 +91,10 @@ def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante,
     return subtotal * PCT_GENERAL, f"{patologo} → 13%", False
 
 
-def desglosar_iva(imp1, presencia, imp2, condicion, obra_social):
+def desglosar_iva(imp1, presencia, imp2, condicion, obra_social, pat1="", pat2=""):
     """Desglosa cada importe en exento / gravado 10.5% / gravado 21%.
-    Devuelve dict con 9 columnas de desglose + IVA 10,5% e IVA 21% a facturar."""
+    Solo calcula IVA para patólogos inscriptos en PATOLOGO_CON_IVA.
+    Devuelve dict con 9 columnas de desglose + IVA 10,5% e IVA 21% + Total a facturar."""
     cond = norm(condicion)
     obra = norm(obra_social)
 
@@ -91,30 +102,41 @@ def desglosar_iva(imp1, presencia, imp2, condicion, obra_social):
     gravado_105 = (cond == "GRAVADO" and obra != "PARTICULAR")
     exento      = not (gravado_21 or gravado_105)
 
-    def asignar(importe):
-        if exento:      return importe, 0.0, 0.0
-        if gravado_105: return 0.0, importe, 0.0
-        return 0.0, 0.0, importe  # gravado_21
+    # Separar importes según si el patólogo tiene IVA o no
+    imp1_iva  = imp1      if pat1 in PATOLOGO_CON_IVA else 0.0
+    imp1_noiv = 0.0       if pat1 in PATOLOGO_CON_IVA else imp1
+    pre_iva   = presencia if pat1 in PATOLOGO_CON_IVA else 0.0  # presencias siempre van al pat1
+    imp2_iva  = imp2      if pat2 in PATOLOGO_CON_IVA else 0.0
+    imp2_noiv = 0.0       if pat2 in PATOLOGO_CON_IVA else imp2
 
-    p1_ex,  p1_105,  p1_21  = asignar(imp1)
-    pre_ex, pre_105, pre_21 = asignar(presencia)
-    p2_ex,  p2_105,  p2_21  = asignar(imp2)
+    def asignar(i1, pre, i2):
+        if exento:
+            return i1, pre, i2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        if gravado_105:
+            return 0.0, 0.0, 0.0, i1, pre, i2, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, i1, pre, i2  # gravado_21
+
+    p1_ex, pre_ex, p2_ex, p1_105, pre_105, p2_105, p1_21, pre_21, p2_21 = asignar(imp1_iva, pre_iva, imp2_iva)
 
     total_105 = p1_105 + pre_105 + p2_105
     total_21  = p1_21  + pre_21  + p2_21
+    iva_10    = round(total_105 * 0.105, 2)
+    iva_21    = round(total_21  * 0.21,  2)
+    total_liq = imp1 + presencia + imp2
+    total_fac = round(total_liq + iva_10 + iva_21, 2)
 
     return {
-        "1ra Firma Exento":          round(p1_ex,  2),
-        "2da Firma Exento":          round(p2_ex,  2),
-        "Presencia Exento":          round(pre_ex, 2),
+        "1ra Firma Exento":          round(p1_ex,   2),
+        "2da Firma Exento":          round(p2_ex,   2),
+        "Presencia Exento":          round(pre_ex,  2),
         "1ra Firma Gravado 10,5%":   round(p1_105,  2),
         "2da Firma Gravado 10,5%":   round(p2_105,  2),
         "Presencia Gravado 10,5%":   round(pre_105, 2),
-        "1ra Firma Gravado 21%":     round(p1_21,  2),
-        "2da Firma Gravado 21%":     round(p2_21,  2),
-        "Presencia Gravado 21%":     round(pre_21, 2),
-        "IVA 10,5%":                 round(total_105 * 0.105, 2),
-        "IVA 21%":                   round(total_21  * 0.21,  2),
+        "1ra Firma Gravado 21%":     round(p1_21,   2),
+        "2da Firma Gravado 21%":     round(p2_21,   2),
+        "Presencia Gravado 21%":     round(pre_21,  2),
+        "IVA 10,5%":                 iva_10,
+        "IVA 21%":                   iva_21,
     }
 
 
@@ -181,7 +203,7 @@ def procesar(df, monto_alberton=MONTO_FIJO_ALBERTON_DEFAULT):
         regla = f"1ra: {regla1} | 2da: {regla2}" if pat2 and not cod_es_especial else regla1
 
         # Desglosar IVA por componente
-        iva = desglosar_iva(imp1_firma, presencia, imp2_firma, condicion, obra_social)
+        iva = desglosar_iva(imp1_firma, presencia, imp2_firma, condicion, obra_social, pat1=pat1, pat2=pat2)
 
         # Preservar todas las columnas originales + agregar liquidación al final
         fila = {col: row.get(col, "") for col in df.columns}
@@ -202,6 +224,8 @@ def procesar(df, monto_alberton=MONTO_FIJO_ALBERTON_DEFAULT):
         fila["Presencia Gravado 21%"]      = iva["Presencia Gravado 21%"]
         fila["IVA 10,5%"]                  = iva["IVA 10,5%"]
         fila["IVA 21%"]                    = iva["IVA 21%"]
+        # Total a facturar = Total Liquidado + IVA correspondiente
+        fila["Total a facturar"]           = round(total + iva["IVA 10,5%"] + iva["IVA 21%"], 2)
         fila["Regla Aplicada"]             = regla
         fila["Observaciones"]              = " | ".join(obs) if obs else ""
         resultados.append(fila)
@@ -244,7 +268,7 @@ COLS_LIQ = [
     "1ra Firma Exento","2da Firma Exento","Presencia Exento",
     "1ra Firma Gravado 10,5%","2da Firma Gravado 10,5%","Presencia Gravado 10,5%",
     "1ra Firma Gravado 21%","2da Firma Gravado 21%","Presencia Gravado 21%",
-    "IVA 10,5%","IVA 21%",
+    "IVA 10,5%","IVA 21%","Total a facturar",
     "Regla Aplicada","Observaciones",
 ]
 COLS_DET = COLS_ORIGINALES + COLS_LIQ
@@ -253,7 +277,7 @@ MONEY = {
     "1ra Firma Exento","2da Firma Exento","Presencia Exento",
     "1ra Firma Gravado 10,5%","2da Firma Gravado 10,5%","Presencia Gravado 10,5%",
     "1ra Firma Gravado 21%","2da Firma Gravado 21%","Presencia Gravado 21%",
-    "IVA 10,5%","IVA 21%","Subtotal","Precio Unit.",
+    "IVA 10,5%","IVA 21%","Total a facturar","Subtotal","Precio Unit.",
 }
 
 
@@ -313,12 +337,22 @@ def construir_excel_general(df_result):
 
     # RESUMEN POR PATÓLOGO
     ws2 = wb.create_sheet("Resumen por Patólogo")
+    # Agrupar por patólogo con todas las columnas de desglose
+    cols_desglose = [
+        "1ra Firma Exento","Presencia Exento","2da Firma Exento",
+        "1ra Firma Gravado 10,5%","Presencia Gravado 10,5%","2da Firma Gravado 10,5%",
+        "1ra Firma Gravado 21%","Presencia Gravado 21%","2da Firma Gravado 21%",
+        "IVA 10,5%","IVA 21%","Total a facturar",
+    ]
+    agg_dict = {
+        "e1": ("Importe Primera Firma","count"),
+        "t1": ("Importe Primera Firma","sum"),
+        "tp": ("Presencias","sum"),
+    }
+    for c in cols_desglose:
+        agg_dict[c] = (c, "sum")
     g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
-        e1=("Importe Primera Firma","count"),
-        t1=("Importe Primera Firma","sum"),
-        tp=("Presencias","sum"),
-        iv10=("IVA 10,5%","sum"),
-        iv21=("IVA 21%","sum"),
+        **agg_dict
     ).reset_index().rename(columns={"Patólogo Primera Firma":"P"})
     g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma").agg(
         e2=("Importe Segunda Firma","count"), t2=("Importe Segunda Firma","sum")
@@ -327,30 +361,60 @@ def construir_excel_general(df_result):
     res["tot"] = res["t1"] + res["tp"] + res["t2"]
     res = res.sort_values("tot", ascending=False)
 
-    hdrs_r = ["Patólogo","Estudios 1ra Firma","Total 1ra Firma ($)","Presencias ($)",
-              "Estudios 2da Firma","Total 2da Firma ($)","Total General ($)",
-              "IVA 10,5% ($)","IVA 21% ($)"]
+    # Columnas del resumen — igual al ejemplo de la imagen
+    hdrs_r = [
+        "Patólogo",
+        "Estudios 1ra Firma", "Total exento 1ra Firma ($)", "Total gravado 10,5% 1ra Firma ($)", "Total gravado 21% 1ra Firma ($)",
+        "Presencias", "Total exento Presencias ($)", "Total gravado 10,5% Presencias ($)", "Total gravado 21% Presencias ($)",
+        "Estudios 2da Firma", "Total exento 2da Firma ($)", "Total gravado 10,5% 2da Firma ($)", "Total gravado 21% 2da Firma ($)",
+        "IVA 10,5% ($)", "IVA 21% ($)", "Total a facturar ($)",
+    ]
     ws2.append(hdrs_r)
-    for c in ws2[1]: hdr(c)
-    ws2.row_dimensions[1].height = 30
+
+    # Colorear encabezados por grupo — igual que la imagen
+    COLOR_1RA  = "1F3864"  # azul oscuro
+    COLOR_PRES = "375623"  # verde oscuro
+    COLOR_2DA  = "843C0C"  # marrón
+    COLOR_IVA  = "7B2C9E"  # púrpura
+    grupos = {
+        0: COLOR_1RA,   # Patólogo
+        1: COLOR_1RA, 2: COLOR_1RA, 3: COLOR_1RA, 4: COLOR_1RA,   # 1ra firma
+        5: COLOR_PRES, 6: COLOR_PRES, 7: COLOR_PRES, 8: COLOR_PRES, # Presencias
+        9: COLOR_2DA, 10: COLOR_2DA, 11: COLOR_2DA, 12: COLOR_2DA,  # 2da firma
+        13: COLOR_IVA, 14: COLOR_IVA, 15: COLOR_IVA,               # IVA + Total
+    }
+    for j, cell in enumerate(ws2[1]):
+        cell.font      = Font(bold=True, color="FFFFFF", name="Arial", size=9)
+        cell.fill      = PatternFill("solid", start_color=grupos.get(j, COLOR_1RA))
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border    = brd()
+    ws2.row_dimensions[1].height = 50
+
+    MONEY_RES = {2,3,4,6,7,8,10,11,12,13,14,15}
     for _, r in res.iterrows():
-        ws2.append([r["P"], int(r["e1"]), round(r["t1"],2), round(r["tp"],2),
-                    int(r["e2"]), round(r["t2"],2), round(r["tot"],2),
-                    round(r["iv10"],2), round(r["iv21"],2)])
+        fila_res = [
+            r["P"],
+            int(r["e1"]), round(r["1ra Firma Exento"],2), round(r["1ra Firma Gravado 10,5%"],2), round(r["1ra Firma Gravado 21%"],2),
+            round(r["tp"],2), round(r["Presencia Exento"],2), round(r["Presencia Gravado 10,5%"],2), round(r["Presencia Gravado 21%"],2),
+            int(r["e2"]), round(r["2da Firma Exento"],2), round(r["2da Firma Gravado 10,5%"],2), round(r["2da Firma Gravado 21%"],2),
+            round(r["IVA 10,5%"],2), round(r["IVA 21%"],2), round(r["Total a facturar"],2),
+        ]
+        ws2.append(fila_res)
         er = ws2.max_row
         for j, cell in enumerate(ws2[er]):
             cell.border = brd(); cell.font = Font(name="Arial", size=9)
             cell.alignment = Alignment(vertical="center")
             if er % 2 == 0: cell.fill = PatternFill("solid", start_color=AZUL_CLARO)
-            if j in (2,3,5,6,7,8): cell.number_format = '$#,##0.00'
+            if j in MONEY_RES: cell.number_format = '$#,##0.00'
     ft = ws2.max_row + 1
-    ws2.append(["TOTAL GENERAL",
-                f"=SUM(B2:B{ft-1})", f"=SUM(C2:C{ft-1})", f"=SUM(D2:D{ft-1})",
-                f"=SUM(E2:E{ft-1})", f"=SUM(F2:F{ft-1})", f"=SUM(G2:G{ft-1})",
-                f"=SUM(H2:H{ft-1})", f"=SUM(I2:I{ft-1})"])
+    totales = ["TOTAL GENERAL", f"=SUM(B2:B{ft-1})"]
+    for col_idx in range(3, 17):
+        col_letter = get_column_letter(col_idx)
+        totales.append(f"=SUM({col_letter}2:{col_letter}{ft-1})")
+    ws2.append(totales)
     for j, cell in enumerate(ws2[ft]):
         hdr(cell); cell.border = brd()
-        if j in (2,3,5,6,7,8): cell.number_format = '$#,##0.00'
+        if j in MONEY_RES: cell.number_format = '$#,##0.00'
     ws2.freeze_panes = "A2"; auto_w(ws2)
     # INCONSISTENCIAS
     ws3    = wb.create_sheet("Inconsistencias")
@@ -458,16 +522,32 @@ def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
     wsr.append([])
 
     if not filas_1ra.empty:
-        kv("Estudios como 1ra firma",   len(filas_1ra),                              fmt="0")
-        kv("Total 1ra firma",            filas_1ra["Importe Primera Firma"].sum())
+        kv("Estudios como 1ra firma",            len(filas_1ra),                                    fmt="0")
+        kv("Total exento 1ra firma",              filas_1ra["1ra Firma Exento"].sum())
+        kv("Total gravado 10,5% 1ra firma",       filas_1ra["1ra Firma Gravado 10,5%"].sum())
+        kv("Total gravado 21% 1ra firma",         filas_1ra["1ra Firma Gravado 21%"].sum())
+        kv("Presencias exento",                   filas_1ra["Presencia Exento"].sum())
+        kv("Presencias gravado 10,5%",            filas_1ra["Presencia Gravado 10,5%"].sum())
+        kv("Presencias gravado 21%",              filas_1ra["Presencia Gravado 21%"].sum())
         wsr.append([])
 
     if not filas_2da.empty:
-        kv("Estudios como 2da firma",   len(filas_2da),                              fmt="0")
-        kv("Total 2da firma",            filas_2da["Importe Segunda Firma"].sum())
+        kv("Estudios como 2da firma",            len(filas_2da),                                    fmt="0")
+        kv("Total exento 2da firma",              filas_2da["2da Firma Exento"].sum())
+        kv("Total gravado 10,5% 2da firma",       filas_2da["2da Firma Gravado 10,5%"].sum())
+        kv("Total gravado 21% 2da firma",         filas_2da["2da Firma Gravado 21%"].sum())
         wsr.append([])
 
-    kv("TOTAL A COBRAR", total_general, bold=True)
+    iva_10_total = (filas_1ra["IVA 10,5%"].sum() if not filas_1ra.empty else 0) +                   (filas_2da["IVA 10,5%"].sum() if not filas_2da.empty else 0)
+    iva_21_total = (filas_1ra["IVA 21%"].sum() if not filas_1ra.empty else 0) +                   (filas_2da["IVA 21%"].sum() if not filas_2da.empty else 0)
+    taf_total    = (filas_1ra["Total a facturar"].sum() if not filas_1ra.empty else 0) +                   (filas_2da["Total a facturar"].sum() if not filas_2da.empty else 0)
+
+    kv("TOTAL A COBRAR",    total_general, bold=True)
+    if iva_10_total > 0 or iva_21_total > 0:
+        wsr.append([])
+        kv("IVA 10,5%",         iva_10_total)
+        kv("IVA 21%",           iva_21_total)
+        kv("TOTAL A FACTURAR",  taf_total,    bold=True)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -640,33 +720,25 @@ if uploaded:
         st.divider()
         st.subheader("👩‍⚕️ Totales por patólogo")
 
-        g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
+        g1_st = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
             pf=("Importe Primera Firma","sum"), pres=("Presencias","sum"),
-            iv10=("IVA 10,5%","sum"), iv21=("IVA 21%","sum")
+            iv10=("IVA 10,5%","sum"), iv21=("IVA 21%","sum"), taf=("Total a facturar","sum")
         ).reset_index().rename(columns={"Patólogo Primera Firma":"Patólogo"})
-        g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma").agg(
+        g2_st = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma").agg(
             sf=("Importe Segunda Firma","sum")
         ).reset_index().rename(columns={"Patólogo Segunda Firma":"Patólogo"})
-        resumen = pd.merge(g1, g2, on="Patólogo", how="outer").fillna(0)
+        resumen = pd.merge(g1_st, g2_st, on="Patólogo", how="outer").fillna(0)
         resumen["Total ($)"] = resumen["pf"] + resumen["pres"] + resumen["sf"]
         resumen = resumen.sort_values("Total ($)", ascending=False).reset_index(drop=True)
         resumen = resumen.rename(columns={
             "pf":"1ra Firma ($)", "pres":"Presencias ($)", "sf":"2da Firma ($)",
-            "iv10":"IVA 10,5% ($)", "iv21":"IVA 21% ($)"
+            "iv10":"IVA 10,5% ($)", "iv21":"IVA 21% ($)", "taf":"Total a facturar ($)"
         })
-        resumen = resumen[["Patólogo","1ra Firma ($)","Presencias ($)","2da Firma ($)","Total ($)","IVA 10,5% ($)","IVA 21% ($)"]]
-        fila_total = pd.DataFrame([{
-            "Patólogo":       "TOTAL GENERAL",
-            "1ra Firma ($)":  resumen["1ra Firma ($)"].sum(),
-            "Presencias ($)": resumen["Presencias ($)"].sum(),
-            "2da Firma ($)":  resumen["2da Firma ($)"].sum(),
-            "Total ($)":      resumen["Total ($)"].sum(),
-            "IVA 10,5% ($)":  resumen["IVA 10,5% ($)"].sum(),
-            "IVA 21% ($)":    resumen["IVA 21% ($)"].sum(),
-        }])
+        resumen = resumen[["Patólogo","1ra Firma ($)","Presencias ($)","2da Firma ($)","Total ($)","IVA 10,5% ($)","IVA 21% ($)","Total a facturar ($)"]]
+        fila_total = pd.DataFrame([{c: resumen[c].sum() if c != "Patólogo" else "TOTAL GENERAL" for c in resumen.columns}])
         resumen_display = pd.concat([resumen, fila_total], ignore_index=True)
-        for col in ["1ra Firma ($)","Presencias ($)","2da Firma ($)","Total ($)","IVA 10,5% ($)","IVA 21% ($)"]:
-            resumen_display[col] = resumen_display[col].apply(lambda x: f"${x:,.2f}")
+        for col in resumen.columns[1:]:
+            resumen_display[col] = resumen_display[col].apply(lambda x: f"${float(x):,.2f}" if x != "" else "")
         st.dataframe(resumen_display, use_container_width=True, hide_index=True)
 
         st.divider()
