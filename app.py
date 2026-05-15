@@ -643,12 +643,17 @@ if uploaded:
         g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
             pf=("Importe Primera Firma","sum"), pres=("Presencias","sum"),
             iv10=("IVA 10,5%","sum"), iv21=("IVA 21%","sum")
-        )
-        g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma")["Importe Segunda Firma"].sum()
-        resumen = g1.join(g2, how="outer").fillna(0)
-        resumen.columns = ["1ra Firma ($)", "Presencias ($)", "IVA 10,5% ($)", "IVA 21% ($)", "2da Firma ($)"]
-        resumen["Total ($)"] = resumen["1ra Firma ($)"] + resumen["Presencias ($)"] + resumen["2da Firma ($)"]
-        resumen = resumen.sort_values("Total ($)", ascending=False).reset_index()
+        ).reset_index().rename(columns={"Patólogo Primera Firma":"Patólogo"})
+        g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma").agg(
+            sf=("Importe Segunda Firma","sum")
+        ).reset_index().rename(columns={"Patólogo Segunda Firma":"Patólogo"})
+        resumen = pd.merge(g1, g2, on="Patólogo", how="outer").fillna(0)
+        resumen["Total ($)"] = resumen["pf"] + resumen["pres"] + resumen["sf"]
+        resumen = resumen.sort_values("Total ($)", ascending=False).reset_index(drop=True)
+        resumen = resumen.rename(columns={
+            "pf":"1ra Firma ($)", "pres":"Presencias ($)", "sf":"2da Firma ($)",
+            "iv10":"IVA 10,5% ($)", "iv21":"IVA 21% ($)"
+        })
         resumen = resumen[["Patólogo","1ra Firma ($)","Presencias ($)","2da Firma ($)","Total ($)","IVA 10,5% ($)","IVA 21% ($)"]]
         fila_total = pd.DataFrame([{
             "Patólogo":       "TOTAL GENERAL",
