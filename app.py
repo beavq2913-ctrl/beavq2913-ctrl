@@ -336,86 +336,103 @@ def construir_excel_general(df_result):
     escribir_hoja_detalle(ws, df_result)
 
     # RESUMEN POR PATÓLOGO
-    ws2 = wb.create_sheet("Resumen por Patólogo")
-    # Agrupar por patólogo con todas las columnas de desglose
+    # ── DATOS BASE para los 3 resúmenes ──────────────────────────────────────────
     cols_desglose = [
         "1ra Firma Exento","Presencia Exento","2da Firma Exento",
         "1ra Firma Gravado 10,5%","Presencia Gravado 10,5%","2da Firma Gravado 10,5%",
         "1ra Firma Gravado 21%","Presencia Gravado 21%","2da Firma Gravado 21%",
         "IVA 10,5%","IVA 21%","Total a facturar",
     ]
-    agg_dict = {
-        "e1": ("Importe Primera Firma","count"),
-        "t1": ("Importe Primera Firma","sum"),
-        "tp": ("Presencias","sum"),
-    }
-    for c in cols_desglose:
-        agg_dict[c] = (c, "sum")
-    g1 = df_result[df_result["Patólogo Primera Firma"] != ""].groupby("Patólogo Primera Firma").agg(
-        **agg_dict
-    ).reset_index().rename(columns={"Patólogo Primera Firma":"P"})
-    g2 = df_result[df_result["Patólogo Segunda Firma"] != ""].groupby("Patólogo Segunda Firma").agg(
+    agg_d1 = {"e1":("Importe Primera Firma","count"),"t1":("Importe Primera Firma","sum"),"tp":("Presencias","sum")}
+    for c in cols_desglose: agg_d1[c] = (c,"sum")
+    g1_all = df_result[df_result["Patólogo Primera Firma"]!=""].groupby("Patólogo Primera Firma").agg(**agg_d1).reset_index().rename(columns={"Patólogo Primera Firma":"P"})
+    g2_all = df_result[df_result["Patólogo Segunda Firma"]!=""].groupby("Patólogo Segunda Firma").agg(
         e2=("Importe Segunda Firma","count"), t2=("Importe Segunda Firma","sum")
     ).reset_index().rename(columns={"Patólogo Segunda Firma":"P"})
-    res = pd.merge(g1, g2, on="P", how="outer").fillna(0)
-    res["tot"] = res["t1"] + res["tp"] + res["t2"]
-    res = res.sort_values("tot", ascending=False)
+    res_all = pd.merge(g1_all, g2_all, on="P", how="outer").fillna(0)
+    res_all["tot"] = res_all["t1"] + res_all["tp"] + res_all["t2"]
+    res_all = res_all.sort_values("tot", ascending=False)
 
-    # Columnas del resumen — igual al ejemplo de la imagen
-    hdrs_r = [
-        "Patólogo",
-        "Estudios 1ra Firma", "Total exento 1ra Firma ($)", "Total gravado 10,5% 1ra Firma ($)", "Total gravado 21% 1ra Firma ($)",
-        "Presencias", "Total exento Presencias ($)", "Total gravado 10,5% Presencias ($)", "Total gravado 21% Presencias ($)",
-        "Estudios 2da Firma", "Total exento 2da Firma ($)", "Total gravado 10,5% 2da Firma ($)", "Total gravado 21% 2da Firma ($)",
-        "IVA 10,5% ($)", "IVA 21% ($)", "Total a facturar ($)",
-    ]
-    ws2.append(hdrs_r)
+    res_iva   = res_all[res_all["P"].isin(PATOLOGO_CON_IVA)].copy()
+    res_noiva = res_all[~res_all["P"].isin(PATOLOGO_CON_IVA)].copy()
 
-    # Colorear encabezados por grupo — igual que la imagen
-    COLOR_1RA  = "1F3864"  # azul oscuro
-    COLOR_PRES = "375623"  # verde oscuro
-    COLOR_2DA  = "843C0C"  # marrón
-    COLOR_IVA  = "7B2C9E"  # púrpura
-    grupos = {
-        0: COLOR_1RA,   # Patólogo
-        1: COLOR_1RA, 2: COLOR_1RA, 3: COLOR_1RA, 4: COLOR_1RA,   # 1ra firma
-        5: COLOR_PRES, 6: COLOR_PRES, 7: COLOR_PRES, 8: COLOR_PRES, # Presencias
-        9: COLOR_2DA, 10: COLOR_2DA, 11: COLOR_2DA, 12: COLOR_2DA,  # 2da firma
-        13: COLOR_IVA, 14: COLOR_IVA, 15: COLOR_IVA,               # IVA + Total
-    }
-    for j, cell in enumerate(ws2[1]):
-        cell.font      = Font(bold=True, color="FFFFFF", name="Arial", size=9)
-        cell.fill      = PatternFill("solid", start_color=grupos.get(j, COLOR_1RA))
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border    = brd()
-    ws2.row_dimensions[1].height = 50
-
-    MONEY_RES = {2,3,4,6,7,8,10,11,12,13,14,15}
-    for _, r in res.iterrows():
-        fila_res = [
-            r["P"],
-            int(r["e1"]), round(r["1ra Firma Exento"],2), round(r["1ra Firma Gravado 10,5%"],2), round(r["1ra Firma Gravado 21%"],2),
-            round(r["tp"],2), round(r["Presencia Exento"],2), round(r["Presencia Gravado 10,5%"],2), round(r["Presencia Gravado 21%"],2),
-            int(r["e2"]), round(r["2da Firma Exento"],2), round(r["2da Firma Gravado 10,5%"],2), round(r["2da Firma Gravado 21%"],2),
-            round(r["IVA 10,5%"],2), round(r["IVA 21%"],2), round(r["Total a facturar"],2),
+    # ── Función para escribir hoja CON IVA (16 columnas) ──────────────────────
+    def escribir_resumen_iva(ws_dest, res, titulo_hoja):
+        hdrs = [
+            "Patólogo",
+            "Estudios 1ra Firma","Total exento 1ra Firma ($)","Total gravado 10,5% 1ra Firma ($)","Total gravado 21% 1ra Firma ($)",
+            "Presencias","Total exento Presencias ($)","Total gravado 10,5% Presencias ($)","Total gravado 21% Presencias ($)",
+            "Estudios 2da Firma","Total exento 2da Firma ($)","Total gravado 10,5% 2da Firma ($)","Total gravado 21% 2da Firma ($)",
+            "IVA 10,5% ($)","IVA 21% ($)","Total a facturar ($)",
         ]
-        ws2.append(fila_res)
-        er = ws2.max_row
-        for j, cell in enumerate(ws2[er]):
-            cell.border = brd(); cell.font = Font(name="Arial", size=9)
-            cell.alignment = Alignment(vertical="center")
-            if er % 2 == 0: cell.fill = PatternFill("solid", start_color=AZUL_CLARO)
-            if j in MONEY_RES: cell.number_format = '$#,##0.00'
-    ft = ws2.max_row + 1
-    totales = ["TOTAL GENERAL", f"=SUM(B2:B{ft-1})"]
-    for col_idx in range(3, 17):
-        col_letter = get_column_letter(col_idx)
-        totales.append(f"=SUM({col_letter}2:{col_letter}{ft-1})")
-    ws2.append(totales)
-    for j, cell in enumerate(ws2[ft]):
-        hdr(cell); cell.border = brd()
-        if j in MONEY_RES: cell.number_format = '$#,##0.00'
-    ws2.freeze_panes = "A2"; auto_w(ws2)
+        ws_dest.append(hdrs)
+        COLOR_1RA="1F3864"; COLOR_PRES="375623"; COLOR_2DA="843C0C"; COLOR_IVA="7B2C9E"
+        grupos={0:COLOR_1RA,1:COLOR_1RA,2:COLOR_1RA,3:COLOR_1RA,4:COLOR_1RA,
+                5:COLOR_PRES,6:COLOR_PRES,7:COLOR_PRES,8:COLOR_PRES,
+                9:COLOR_2DA,10:COLOR_2DA,11:COLOR_2DA,12:COLOR_2DA,
+                13:COLOR_IVA,14:COLOR_IVA,15:COLOR_IVA}
+        for j,cell in enumerate(ws_dest[1]):
+            cell.font=Font(bold=True,color="FFFFFF",name="Arial",size=9)
+            cell.fill=PatternFill("solid",start_color=grupos.get(j,COLOR_1RA))
+            cell.alignment=Alignment(horizontal="center",vertical="center",wrap_text=True)
+            cell.border=brd()
+        ws_dest.row_dimensions[1].height=50
+        MONEY_R={2,3,4,6,7,8,10,11,12,13,14,15}
+        for _,r in res.iterrows():
+            ws_dest.append([
+                r["P"],
+                int(r["e1"]),round(r["1ra Firma Exento"],2),round(r["1ra Firma Gravado 10,5%"],2),round(r["1ra Firma Gravado 21%"],2),
+                round(r["tp"],2),round(r["Presencia Exento"],2),round(r["Presencia Gravado 10,5%"],2),round(r["Presencia Gravado 21%"],2),
+                int(r["e2"]),round(r["2da Firma Exento"],2),round(r["2da Firma Gravado 10,5%"],2),round(r["2da Firma Gravado 21%"],2),
+                round(r["IVA 10,5%"],2),round(r["IVA 21%"],2),round(r["Total a facturar"],2),
+            ])
+            er=ws_dest.max_row
+            for j,cell in enumerate(ws_dest[er]):
+                cell.border=brd(); cell.font=Font(name="Arial",size=9); cell.alignment=Alignment(vertical="center")
+                if er%2==0: cell.fill=PatternFill("solid",start_color=AZUL_CLARO)
+                if j in MONEY_R: cell.number_format="$#,##0.00"
+        ft=ws_dest.max_row+1
+        tots=["TOTAL GENERAL",f"=SUM(B2:B{ft-1})"]
+        for ci in range(3,17): tots.append(f"=SUM({get_column_letter(ci)}2:{get_column_letter(ci)}{ft-1})")
+        ws_dest.append(tots)
+        for j,cell in enumerate(ws_dest[ft]):
+            hdr(cell); cell.border=brd()
+            if j in MONEY_R: cell.number_format="$#,##0.00"
+        ws_dest.freeze_panes="A2"; auto_w(ws_dest)
+
+    # ── Función para escribir hoja SIN IVA (7 columnas simples) ───────────────
+    def escribir_resumen_noiva(ws_dest, res):
+        hdrs=["Patólogo","Estudios 1ra Firma","Total 1ra Firma ($)","Presencias ($)","Estudios 2da Firma","Total 2da Firma ($)","Total General ($)"]
+        ws_dest.append(hdrs)
+        for c in ws_dest[1]: hdr(c)
+        ws_dest.row_dimensions[1].height=30
+        for _,r in res.iterrows():
+            ws_dest.append([r["P"],int(r["e1"]),round(r["t1"],2),round(r["tp"],2),int(r["e2"]),round(r["t2"],2),round(r["tot"],2)])
+            er=ws_dest.max_row
+            for j,cell in enumerate(ws_dest[er]):
+                cell.border=brd(); cell.font=Font(name="Arial",size=9); cell.alignment=Alignment(vertical="center")
+                if er%2==0: cell.fill=PatternFill("solid",start_color=AZUL_CLARO)
+                if j in (2,3,5,6): cell.number_format="$#,##0.00"
+        ft=ws_dest.max_row+1
+        ws_dest.append(["TOTAL GENERAL",f"=SUM(B2:B{ft-1})",f"=SUM(C2:C{ft-1})",f"=SUM(D2:D{ft-1})",
+                        f"=SUM(E2:E{ft-1})",f"=SUM(F2:F{ft-1})",f"=SUM(G2:G{ft-1})"])
+        for j,cell in enumerate(ws_dest[ft]):
+            hdr(cell); cell.border=brd()
+            if j in (2,3,5,6): cell.number_format="$#,##0.00"
+        ws_dest.freeze_panes="A2"; auto_w(ws_dest)
+
+    # ── HOJA 1: Resumen con IVA ────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Resumen con IVA")
+    escribir_resumen_iva(ws2, res_iva, "Resumen con IVA")
+
+    # ── HOJA 2: Resumen sin IVA ───────────────────────────────────────────────
+    ws2b = wb.create_sheet("Resumen sin IVA")
+    escribir_resumen_noiva(ws2b, res_noiva)
+
+    # ── HOJA 3: Resumen General (todos) ──────────────────────────────────────
+    ws2c = wb.create_sheet("Resumen General")
+    escribir_resumen_iva(ws2c, res_all, "Resumen General")
+
     # INCONSISTENCIAS
     ws3    = wb.create_sheet("Inconsistencias")
     df_inc = df_result[df_result["Observaciones"] != ""].copy()
