@@ -93,8 +93,8 @@ def calcular_importe(patologo, firma, subtotal, cod_fact, organo_raw, derivante,
 
 def desglosar_iva(imp1, presencia, imp2, condicion, obra_social, pat1="", pat2=""):
     """Desglosa cada importe en exento / gravado 10.5% / gravado 21%.
-    Solo calcula IVA para patólogos inscriptos en PATOLOGO_CON_IVA.
-    Devuelve dict con 9 columnas de desglose + IVA 10,5% e IVA 21% + Total a facturar."""
+    TODOS los importes se clasifican en el desglose segun la condicion de la fila.
+    Solo se calcula IVA sobre los importes de patologos en PATOLOGO_CON_IVA."""
     cond = norm(condicion)
     obra = norm(obra_social)
 
@@ -102,28 +102,29 @@ def desglosar_iva(imp1, presencia, imp2, condicion, obra_social, pat1="", pat2="
     gravado_105 = (cond == "GRAVADO" and obra != "PARTICULAR")
     exento      = not (gravado_21 or gravado_105)
 
-    # Separar importes según si el patólogo tiene IVA o no
-    imp1_iva  = imp1      if pat1 in PATOLOGO_CON_IVA else 0.0
-    imp1_noiv = 0.0       if pat1 in PATOLOGO_CON_IVA else imp1
-    pre_iva   = presencia if pat1 in PATOLOGO_CON_IVA else 0.0  # presencias siempre van al pat1
-    imp2_iva  = imp2      if pat2 in PATOLOGO_CON_IVA else 0.0
-    imp2_noiv = 0.0       if pat2 in PATOLOGO_CON_IVA else imp2
+    def asignar(importe):
+        if exento:      return importe, 0.0, 0.0
+        if gravado_105: return 0.0, importe, 0.0
+        return 0.0, 0.0, importe
 
-    def asignar(i1, pre, i2):
-        if exento:
-            return i1, pre, i2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        if gravado_105:
-            return 0.0, 0.0, 0.0, i1, pre, i2, 0.0, 0.0, 0.0
-        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, i1, pre, i2  # gravado_21
+    # Clasificar TODOS los importes en exento/gravado
+    p1_ex,  p1_105,  p1_21  = asignar(imp1)
+    pre_ex, pre_105, pre_21 = asignar(presencia)
+    p2_ex,  p2_105,  p2_21  = asignar(imp2)
 
-    p1_ex, pre_ex, p2_ex, p1_105, pre_105, p2_105, p1_21, pre_21, p2_21 = asignar(imp1_iva, pre_iva, imp2_iva)
+    # IVA solo sobre la porcion de patologos CON IVA
+    imp1_iva = imp1      if pat1 in PATOLOGO_CON_IVA else 0.0
+    pre_iva  = presencia if pat1 in PATOLOGO_CON_IVA else 0.0
+    imp2_iva = imp2      if pat2 in PATOLOGO_CON_IVA else 0.0
 
-    total_105 = p1_105 + pre_105 + p2_105
-    total_21  = p1_21  + pre_21  + p2_21
-    iva_10    = round(total_105 * 0.105, 2)
-    iva_21    = round(total_21  * 0.21,  2)
-    total_liq = imp1 + presencia + imp2
-    total_fac = round(total_liq + iva_10 + iva_21, 2)
+    _, p1_iva_105, p1_iva_21   = asignar(imp1_iva)
+    _, pre_iva_105, pre_iva_21 = asignar(pre_iva)
+    _, p2_iva_105, p2_iva_21   = asignar(imp2_iva)
+
+    total_iva_105 = p1_iva_105 + pre_iva_105 + p2_iva_105
+    total_iva_21  = p1_iva_21  + pre_iva_21  + p2_iva_21
+    iva_10 = round(total_iva_105 * 0.105, 2)
+    iva_21_calc = round(total_iva_21 * 0.21, 2)
 
     return {
         "1ra Firma Exento":          round(p1_ex,   2),
@@ -135,10 +136,13 @@ def desglosar_iva(imp1, presencia, imp2, condicion, obra_social, pat1="", pat2="
         "1ra Firma Gravado 21%":     round(p1_21,   2),
         "2da Firma Gravado 21%":     round(p2_21,   2),
         "Presencia Gravado 21%":     round(pre_21,  2),
+        "IVA 10,5% 1ra base":        round(p1_iva_105,  2),
+        "IVA 21% 1ra base":          round(p1_iva_21,   2),
+        "IVA 10,5% 2da base":        round(p2_iva_105,  2),
+        "IVA 21% 2da base":          round(p2_iva_21,   2),
         "IVA 10,5%":                 iva_10,
-        "IVA 21%":                   iva_21,
+        "IVA 21%":                   iva_21_calc,
     }
-
 
 def procesar(df, monto_alberton=MONTO_FIJO_ALBERTON_DEFAULT):
     alberton_pagados = set()
@@ -222,21 +226,15 @@ def procesar(df, monto_alberton=MONTO_FIJO_ALBERTON_DEFAULT):
         fila["1ra Firma Gravado 21%"]      = iva["1ra Firma Gravado 21%"]
         fila["2da Firma Gravado 21%"]      = iva["2da Firma Gravado 21%"]
         fila["Presencia Gravado 21%"]      = iva["Presencia Gravado 21%"]
-        # IVA separado por firma para el resumen
-        # IVA sobre 1ra firma + presencias
-        iva_1ra_105 = round((iva["1ra Firma Gravado 10,5%"] + iva["Presencia Gravado 10,5%"]) * 0.105, 2)
-        iva_1ra_21  = round((iva["1ra Firma Gravado 21%"]   + iva["Presencia Gravado 21%"])   * 0.21,  2)
-        # IVA sobre 2da firma
-        iva_2da_105 = round(iva["2da Firma Gravado 10,5%"] * 0.105, 2)
-        iva_2da_21  = round(iva["2da Firma Gravado 21%"]   * 0.21,  2)
-        fila["IVA 10,5%"]                  = iva_1ra_105 + iva_2da_105
-        fila["IVA 21%"]                    = iva_1ra_21  + iva_2da_21
-        fila["IVA 10,5% 1ra"]              = iva_1ra_105
-        fila["IVA 21% 1ra"]                = iva_1ra_21
-        fila["IVA 10,5% 2da"]              = iva_2da_105
-        fila["IVA 21% 2da"]                = iva_2da_21
-        # Total a facturar = Total Liquidado + IVA correspondiente
-        fila["Total a facturar"]           = round(total + iva_1ra_105 + iva_1ra_21 + iva_2da_105 + iva_2da_21, 2)
+        # IVA calculado en desglosar_iva sobre la base acumulada por firma
+        fila["IVA 10,5%"]                  = iva["IVA 10,5%"]
+        fila["IVA 21%"]                    = iva["IVA 21%"]
+        fila["IVA 10,5% 1ra"]              = round(iva["IVA 10,5% 1ra base"] * 0.105, 2)
+        fila["IVA 21% 1ra"]                = round(iva["IVA 21% 1ra base"]  * 0.21,  2)
+        fila["IVA 10,5% 2da"]              = round(iva["IVA 10,5% 2da base"] * 0.105, 2)
+        fila["IVA 21% 2da"]                = round(iva["IVA 21% 2da base"]  * 0.21,  2)
+        # Total a facturar = Total Liquidado + IVA total
+        fila["Total a facturar"]           = round(total + iva["IVA 10,5%"] + iva["IVA 21%"], 2)
         fila["Regla Aplicada"]             = regla
         fila["Observaciones"]              = " | ".join(obs) if obs else ""
         resultados.append(fila)
@@ -348,30 +346,35 @@ def construir_excel_general(df_result):
 
     # RESUMEN POR PATÓLOGO
     # ── DATOS BASE para los 3 resúmenes ──────────────────────────────────────────
-    cols_d = [
-        "1ra Firma Exento","Presencia Exento","2da Firma Exento",
-        "1ra Firma Gravado 10,5%","Presencia Gravado 10,5%","2da Firma Gravado 10,5%",
-        "1ra Firma Gravado 21%","Presencia Gravado 21%","2da Firma Gravado 21%",
+    # ── DATOS BASE para los 3 resúmenes ──────────────────────────────────────────
+    # g1: solo columnas de 1ra firma y presencias (2da firma viene de g2)
+    cols_1ra = [
+        "1ra Firma Exento","Presencia Exento",
+        "1ra Firma Gravado 10,5%","Presencia Gravado 10,5%",
+        "1ra Firma Gravado 21%","Presencia Gravado 21%",
     ]
-    # g1: por 1ra firma — importes + desglose + IVA de 1ra firma + presencias
     agg1 = {"e1":("Importe Primera Firma","count"),"t1":("Importe Primera Firma","sum"),"tp":("Presencias","sum"),
             "iv10_1ra":("IVA 10,5% 1ra","sum"),"iv21_1ra":("IVA 21% 1ra","sum")}
-    for c in cols_d: agg1[c] = (c,"sum")
-    g1 = df_result[df_result["Patólogo Primera Firma"]!=""].groupby("Patólogo Primera Firma").agg(**agg1).reset_index().rename(columns={"Patólogo Primera Firma":"P"})
+    for c in cols_1ra: agg1[c] = (c,"sum")
 
     # g2: por 2da firma — importe 2da firma + IVA de 2da firma
     g2 = df_result[df_result["Patólogo Segunda Firma"]!=""].groupby("Patólogo Segunda Firma").agg(
         e2=("Importe Segunda Firma","count"), t2=("Importe Segunda Firma","sum"),
-        iv10_2da=("IVA 10,5% 2da","sum"), iv21_2da=("IVA 21% 2da","sum")
+        iv10_2da=("IVA 10,5% 2da","sum"), iv21_2da=("IVA 21% 2da","sum"),
+        **{"2da Firma Exento":        ("2da Firma Exento",       "sum"),
+           "2da Firma Gravado 10,5%": ("2da Firma Gravado 10,5%","sum"),
+           "2da Firma Gravado 21%":   ("2da Firma Gravado 21%",  "sum")}
     ).reset_index().rename(columns={"Patólogo Segunda Firma":"P"})
 
     res_all = pd.merge(g1, g2, on="P", how="outer").fillna(0)
     res_all["tot"]  = res_all["t1"] + res_all["tp"] + res_all["t2"]
-    res_all["iv10"] = res_all["iv10_1ra"] + res_all["iv10_2da"]
-    res_all["iv21"] = res_all["iv21_1ra"] + res_all["iv21_2da"]
+    # IVA: usar las columnas de IVA por firma calculadas en procesar()
+    # iv10_1ra/iv21_1ra = IVA de 1ra firma + presencias para patólogos CON IVA
+    # iv10_2da/iv21_2da = IVA de 2da firma para patólogos CON IVA
+    res_all["iv10"] = (res_all["iv10_1ra"] + res_all["iv10_2da"]).round(2)
+    res_all["iv21"] = (res_all["iv21_1ra"] + res_all["iv21_2da"]).round(2)
     res_all["taf"]  = res_all["tot"] + res_all["iv10"] + res_all["iv21"]
     res_all = res_all.sort_values("tot", ascending=False)
-
     res_iva   = res_all[res_all["P"].isin(PATOLOGO_CON_IVA)].copy()
     res_noiva = res_all[~res_all["P"].isin(PATOLOGO_CON_IVA)].copy()
 
