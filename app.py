@@ -194,10 +194,10 @@ COLS_DET = COLS_ORIGINALES + COLS_LIQ
 MONEY = {"Importe Primera Firma","Presencias","Importe Segunda Firma","Total Liquidado","Subtotal","Precio Unit."}
 
 
-def escribir_hoja_detalle(ws, filas_df, titulo_hoja=None):
+def escribir_hoja_detalle(ws, filas_df, titulo_hoja=None, cols_override=None):
     """Escribe filas de detalle en una hoja con formato."""
-    # Usar solo columnas que existen en el df (por compatibilidad entre archivos)
-    cols = [c for c in COLS_DET if c in filas_df.columns]
+    base = cols_override if cols_override is not None else COLS_DET
+    cols = [c for c in base if c in filas_df.columns]
     ws.append(cols)
     for c in ws[1]: hdr(c)
     ws.row_dimensions[1].height = 30
@@ -342,35 +342,25 @@ def construir_excel_patologo(nombre_patologo, filas_1ra, filas_2da):
 
     total_general = 0.0
 
-    def extraer_regla(regla_completa, firma):
-        """Extrae solo la parte de la regla que corresponde a la firma indicada."""
-        if "|" not in str(regla_completa):
-            return regla_completa  # regla simple, no tiene separador
-        partes = str(regla_completa).split(" | ")
-        for parte in partes:
-            if parte.startswith(f"{firma}:"):
-                return parte[len(f"{firma}: "):]  # quitar el prefijo "1ra: " o "2da: "
-        return regla_completa
+    COLS_SIN_OBS = [c for c in COLS_DET if c not in ("Regla Aplicada", "Observaciones")]
 
-    # Hoja 1ra firma: solo su importe, regla solo de su firma
+    # Hoja 1ra firma: solo su importe, sin regla ni observaciones
     if not filas_1ra.empty:
         df_1ra = filas_1ra.copy()
         df_1ra["Importe Segunda Firma"] = 0.0
         df_1ra["Total Liquidado"]       = df_1ra["Importe Primera Firma"] + df_1ra["Presencias"]
-        df_1ra["Regla Aplicada"]        = df_1ra["Regla Aplicada"].apply(lambda r: extraer_regla(r, "1ra"))
         ws1 = wb.create_sheet("Primera Firma")
-        escribir_hoja_detalle(ws1, df_1ra)
+        escribir_hoja_detalle(ws1, df_1ra, cols_override=COLS_SIN_OBS)
         total_general += df_1ra["Importe Primera Firma"].sum()
 
-    # Hoja 2da firma: solo su importe, regla solo de su firma
+    # Hoja 2da firma: solo su importe, sin regla ni observaciones
     if not filas_2da.empty:
         df_2da = filas_2da.copy()
         df_2da["Importe Primera Firma"] = 0.0
         df_2da["Presencias"]            = 0.0
         df_2da["Total Liquidado"]       = df_2da["Importe Segunda Firma"]
-        df_2da["Regla Aplicada"]        = df_2da["Regla Aplicada"].apply(lambda r: extraer_regla(r, "2da"))
         ws2 = wb.create_sheet("Segunda Firma")
-        escribir_hoja_detalle(ws2, df_2da)
+        escribir_hoja_detalle(ws2, df_2da, cols_override=COLS_SIN_OBS)
         total_general += df_2da["Importe Segunda Firma"].sum()
 
     # Hoja resumen del patólogo
