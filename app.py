@@ -356,6 +356,7 @@ def construir_excel_general(df_result):
     agg1 = {"e1":("Importe Primera Firma","count"),"t1":("Importe Primera Firma","sum"),"tp":("Presencias","sum"),
             "iv10_1ra":("IVA 10,5% 1ra","sum"),"iv21_1ra":("IVA 21% 1ra","sum")}
     for c in cols_1ra: agg1[c] = (c,"sum")
+    g1 = df_result[df_result["Patólogo Primera Firma"]!=""].groupby("Patólogo Primera Firma").agg(**agg1).reset_index().rename(columns={"Patólogo Primera Firma":"P"})
 
     # g2: por 2da firma — importe 2da firma + IVA de 2da firma
     g2 = df_result[df_result["Patólogo Segunda Firma"]!=""].groupby("Patólogo Segunda Firma").agg(
